@@ -1,0 +1,28 @@
+[package]
+name = "pulsesend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+dirs = "7.0.0"
+rpassword = "7.5.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+ureq = { version = "2", default-features = false, features = ["json", "tls", "gzip", "proxy-from-env"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
+
+# Certificats du système (CA d'entreprise, mkcert) hors macOS : sur macOS, ils passent par les
+# frameworks Apple, introuvables en compilation croisée ; la liste intégrée suffit pour l'API publique.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+rustls-native-certs = "0.8"
+
+# Binaire distribué par curl : petit et autonome.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
