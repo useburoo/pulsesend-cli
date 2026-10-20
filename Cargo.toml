@@ -1,6 +1,6 @@
 [package]
 name = "pulsesend"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -22,6 +22,8 @@ rustls = { version = "0.23", default-features = false, features = [
     "tls12",
 ] }
 webpki-roots = "0.26"
+indicatif = "0.18.6"
+console = "0.16.6"
 
 # Certificats du système (CA d'entreprise, mkcert) hors macOS : sur macOS, ils passent par les
 # frameworks Apple, introuvables en compilation croisée ; la liste intégrée suffit pour l'API publique.
