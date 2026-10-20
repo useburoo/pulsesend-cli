@@ -133,6 +133,12 @@ pub fn status(status: &str) -> String {
     }
 }
 
+/// Étiquette grisée alignée sur `width` colonnes. L'alignement se fait AVANT la couleur :
+/// les codes ANSI comptent dans `{:<n}`, qui n'alignerait plus rien en terminal.
+pub fn key(text: &str, width: usize) -> String {
+    style(format!("{text:<width$}")).dim().to_string()
+}
+
 pub fn label(text: &str) -> String {
     style(text).dim().to_string()
 }
@@ -198,7 +204,7 @@ pub fn print_error(err: &anyhow::Error, base: &str) {
     let rows = [("code", body.code.as_deref()), ("field", body.param.as_deref()), ("request", request_id.as_deref())];
     for (name, value) in rows {
         if let Some(value) = value {
-            eprintln!("  {:<9}{value}", label(name));
+            eprintln!("  {}{value}", key(name, 9));
         }
     }
 

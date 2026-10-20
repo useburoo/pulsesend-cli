@@ -234,9 +234,9 @@ fn whoami(cli: &Cli, ui: Ui, client: &api::Client, base: &str, key: &str) -> Res
             "ok": check.is_ok(),
         }));
     } else {
-        println!("{:<8}{} · {} · from {source}", ui::label("Key"), config::mask(key), ui::mode(mode(key)));
-        println!("{:<8}{base}", ui::label("API"));
-        println!("{:<8}{}", ui::label("Config"), config::path()?.display());
+        println!("{}{} · {} · from {source}", ui::key("Key", 8), config::mask(key), ui::mode(mode(key)));
+        println!("{}{base}", ui::key("API", 8));
+        println!("{}{}", ui::key("Config", 8), config::path()?.display());
     }
 
     check?;
@@ -360,10 +360,10 @@ fn print_summary(email: &Value) {
     ];
 
     for (name, value) in rows {
-        println!("  {:<9}{value}", ui::label(name));
+        println!("  {}{value}", ui::key(name, 9));
     }
     if email.get("test_mode").and_then(Value::as_bool) == Some(true) {
-        println!("  {:<9}{}", ui::label("mode"), ui::mode("test"));
+        println!("  {}{}", ui::key("mode", 9), ui::mode("test"));
     }
 }
 
@@ -446,7 +446,7 @@ fn get(cli: &Cli, ui: Ui, client: &api::Client, id: &str) -> Result<()> {
     lines.push(("created", str_of(&email, "created_at")));
 
     for (name, value) in lines {
-        println!("{:<10}{value}", ui::label(name));
+        println!("{}{value}", ui::key(name, 10));
     }
 
     Ok(())
@@ -566,6 +566,14 @@ mod tests {
     fn detects_mode() {
         assert_eq!(mode("ps_test_abc"), "test");
         assert_eq!(mode("ps_live_abc"), "live");
+    }
+
+    #[test]
+    fn aligns_colored_labels() {
+        console::set_colors_enabled(true);
+        let k = ui::key("id", 9);
+        assert_eq!(console::measure_text_width(&k), 9);
+        assert!(k.contains('\u{1b}'));
     }
 
     #[test]
