@@ -10,8 +10,17 @@ dirs = "7.0.0"
 rpassword = "7.5.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-ureq = { version = "2", default-features = false, features = ["json", "tls", "gzip", "proxy-from-env"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ureq = { version = "2", default-features = false, features = [
+    "json",
+    "tls",
+    "gzip",
+    "proxy-from-env",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+] }
 webpki-roots = "0.26"
 
 # Certificats du système (CA d'entreprise, mkcert) hors macOS : sur macOS, ils passent par les
