@@ -1,0 +1,189 @@
+name: Release
+
+# Un tag v* (identique à `version` dans Cargo.toml) : compilation native sur les cinq plateformes,
+# test de chaque binaire, puis release GitHub, archives sur R2 (script d'installation) et formule Homebrew.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that the tag matches Cargo.toml
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # Le binaire Intel ne tourne pas sur le runner Apple Silicon sans Rosetta : on ne le lance pas.
+      - name: Smoke test
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          bin=target/${{ matrix.target }}/release/pulsesend
+          "$bin" --version
+          "$bin" --version | grep -q "$VERSION"
+
+      - name: Package
+        shell: bash
+        run: |
+          name="pulsesend-$VERSION-${{ matrix.target }}"
+          release_dir="target/${{ matrix.target }}/release"
+          mkdir -p dist
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            archive="$name.zip"
+            7z a -tzip "dist/$archive" "./$release_dir/pulsesend.exe" > /dev/null
+          else
+            archive="$name.tar.gz"
+            tar -czf "dist/$archive" -C "$release_dir" pulsesend
+          fi
+          cd dist
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+          cat "$archive.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Verify checksums
+        run: cd dist && sha256sum -c *.sha256
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+
+      # Le script https://pulse-send.jiordiviera.me/install.sh télécharge depuis R2 (bucket public pulse-send).
+      - name: Upload to R2
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          put() { # $1 = fichier, $2 = clé, $3 = Content-Type, $4 = Cache-Control
+            code=$(curl -s -o /dev/null -w '%{http_code}' --aws-sigv4 'aws:amz:auto:s3' \
+              --user "$R2_ACCESS_KEY_ID:$R2_SECRET_ACCESS_KEY" \
+              -H "Content-Type: $3" -H "Cache-Control: $4" \
+              -T "$1" "$R2_ENDPOINT/$R2_BUCKET/$2")
+            if [ "$code" != 200 ]; then echo "upload of $2 failed (HTTP $code)"; exit 1; fi
+            echo "uploaded $2"
+          }
+          for f in dist/*; do
+            name=$(basename "$f")
+            case "$name" in
+              *.sha256) type=text/plain ;;
+              *.zip) type=application/zip ;;
+              *) type=application/gzip ;;
+            esac
+            put "$f" "cli/$version/$name" "$type" "public, max-age=31536000, immutable"
+          done
+          # latest.txt en dernier, une fois toutes les archives en ligne.
+          echo "$version" > latest.txt
+          put latest.txt cli/latest.txt text/plain "public, max-age=300"
+
+      - name: Update the Homebrew tap
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          sha() { cut -d ' ' -f 1 "dist/pulsesend-$version-$1.tar.gz.sha256"; }
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2> /dev/null
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/tap" git clone --depth 1 git@github.com:jiordiviera/homebrew-tap.git tap
+
+          mkdir -p tap/Formula
+          cat > tap/Formula/pulsesend.rb <<RUBY
+          class Pulsesend < Formula
+            desc "Send transactional email with PulseSend from your terminal"
+            homepage "https://docs.pulse-send.jiordiviera.me/cli"
+            version "$version"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "$url/pulsesend-$version-aarch64-apple-darwin.tar.gz"
+                sha256 "$(sha aarch64-apple-darwin)"
+              end
+              on_intel do
+                url "$url/pulsesend-$version-x86_64-apple-darwin.tar.gz"
+                sha256 "$(sha x86_64-apple-darwin)"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "$url/pulsesend-$version-aarch64-unknown-linux-musl.tar.gz"
+                sha256 "$(sha aarch64-unknown-linux-musl)"
+              end
+              on_intel do
+                url "$url/pulsesend-$version-x86_64-unknown-linux-musl.tar.gz"
+                sha256 "$(sha x86_64-unknown-linux-musl)"
+              end
+            end
+
+            def install
+              bin.install "pulsesend"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/pulsesend --version")
+            end
+          end
+          RUBY
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/pulsesend.rb
+          git commit -m "pulsesend $version"
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/tap" git push origin HEAD

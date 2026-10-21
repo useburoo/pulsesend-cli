@@ -26,7 +26,12 @@ pub struct ApiErrorBody {
 #[derive(Debug)]
 pub enum Error {
     /// Réponse d'erreur de l'API (4xx / 5xx).
-    Api { status: u16, body: ApiErrorBody, request_id: Option<String> },
+    // Encadré : garde `Result<_, Error>` petit (clippy::result_large_err).
+    Api {
+        status: u16,
+        body: Box<ApiErrorBody>,
+        request_id: Option<String>,
+    },
     /// Réseau : DNS, TLS, délai dépassé…
     Transport(String),
     /// Réponse illisible.
@@ -72,7 +77,11 @@ impl Client {
             .user_agent(concat!("pulsesend-cli/", env!("CARGO_PKG_VERSION")))
             .build();
 
-        Self { agent, base: base.trim_end_matches('/').to_string(), key: key.to_string() }
+        Self {
+            agent,
+            base: base.trim_end_matches('/').to_string(),
+            key: key.to_string(),
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -80,7 +89,8 @@ impl Client {
     }
 
     fn auth(&self, req: ureq::Request) -> ureq::Request {
-        req.set("Authorization", &format!("Bearer {}", self.key)).set("Accept", "application/json")
+        req.set("Authorization", &format!("Bearer {}", self.key))
+            .set("Accept", "application/json")
     }
 
     pub fn get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, Error> {
@@ -117,12 +127,28 @@ impl Client {
                         let message = json
                             .as_ref()
                             .and_then(|v| v.get("message").and_then(Value::as_str).map(str::to_string))
-                            .unwrap_or_else(|| if raw.trim().is_empty() { format!("HTTP {status}") } else { truncate(raw.trim(), 200) });
+                            .unwrap_or_else(|| {
+                                if raw.trim().is_empty() {
+                                    format!("HTTP {status}")
+                                } else {
+                                    truncate(raw.trim(), 200)
+                                }
+                            });
 
-                        ApiErrorBody { kind: None, code: None, message: Some(truncate(&message, 300)), param: None, doc_url: None }
+                        ApiErrorBody {
+                            kind: None,
+                            code: None,
+                            message: Some(truncate(&message, 300)),
+                            param: None,
+                            doc_url: None,
+                        }
                     });
 
-                Err(Error::Api { status, body, request_id })
+                Err(Error::Api {
+                    status,
+                    body: Box::new(body),
+                    request_id,
+                })
             }
             Err(ureq::Error::Transport(t)) => Err(Error::Transport(t.to_string())),
         }
@@ -133,7 +159,9 @@ impl Client {
 /// sur une image minimale sans certificats, et derrière un proxy d'entreprise ou un CA local (mkcert).
 fn tls_config() -> Arc<rustls::ClientConfig> {
     #[cfg_attr(target_os = "macos", allow(unused_mut))]
-    let mut roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+    let mut roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
     #[cfg(not(target_os = "macos"))]
     roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
 

@@ -34,6 +34,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)] // une seule commande analysée par exécution
 enum Command {
     /// Save an API key for the next commands.
     Login,
@@ -128,7 +129,10 @@ fn main() -> ExitCode {
 fn base_url(cli: &Cli) -> String {
     let saved = config::load().unwrap_or_default();
 
-    cli.base_url.clone().or(saved.base_url).unwrap_or_else(|| config::DEFAULT_BASE_URL.to_string())
+    cli.base_url
+        .clone()
+        .or(saved.base_url)
+        .unwrap_or_else(|| config::DEFAULT_BASE_URL.to_string())
 }
 
 fn run(cli: &Cli, ui: Ui, base: &str) -> Result<ExitCode> {
@@ -147,13 +151,19 @@ fn run(cli: &Cli, ui: Ui, base: &str) -> Result<ExitCode> {
         _ => {}
     }
 
-    let key = cli.api_key.clone().or(saved.api_key).context("no API key: run `pulsesend login`, or set PULSESEND_API_KEY")?;
+    let key = cli
+        .api_key
+        .clone()
+        .or(saved.api_key)
+        .context("no API key: run `pulsesend login`, or set PULSESEND_API_KEY")?;
     let client = api::Client::new(base, &key);
 
     match &cli.command {
         Command::Whoami => whoami(cli, ui, &client, base, &key).map(|()| ExitCode::SUCCESS),
         Command::Send(args) => send(cli, ui, &client, args),
-        Command::Emails(EmailsCommand::List { limit, cursor }) => list(cli, ui, &client, *limit, cursor.as_deref()).map(|()| ExitCode::SUCCESS),
+        Command::Emails(EmailsCommand::List { limit, cursor }) => {
+            list(cli, ui, &client, *limit, cursor.as_deref()).map(|()| ExitCode::SUCCESS)
+        }
         Command::Emails(EmailsCommand::Get { id }) => get(cli, ui, &client, id).map(|()| ExitCode::SUCCESS),
         Command::Login | Command::Logout => unreachable!(),
     }
@@ -166,7 +176,11 @@ fn login(cli: &Cli, ui: Ui, base: &str) -> Result<()> {
             if !std::io::stdin().is_terminal() {
                 bail!("no terminal to type the key in: pass --api-key or set PULSESEND_API_KEY");
             }
-            ui.note(&format!("{}  {}", ui::strong("PulseSend"), ui::label(concat!("v", env!("CARGO_PKG_VERSION")))));
+            ui.note(&format!(
+                "{}  {}",
+                ui::strong("PulseSend"),
+                ui::label(concat!("v", env!("CARGO_PKG_VERSION")))
+            ));
             ui.note(&ui::label(&format!("Create a key at {}/api-keys", base.trim_end_matches('/'))));
             ui.note("");
             ui::read_masked("API key")?
@@ -234,7 +248,12 @@ fn whoami(cli: &Cli, ui: Ui, client: &api::Client, base: &str, key: &str) -> Res
             "ok": check.is_ok(),
         }));
     } else {
-        println!("{}{} · {} · from {source}", ui::key("Key", 8), config::mask(key), ui::mode(mode(key)));
+        println!(
+            "{}{} · {} · from {source}",
+            ui::key("Key", 8),
+            config::mask(key),
+            ui::mode(mode(key))
+        );
         println!("{}{base}", ui::key("API", 8));
         println!("{}{}", ui::key("Config", 8), config::path()?.display());
     }
@@ -403,10 +422,10 @@ fn list(cli: &Cli, ui: Ui, client: &api::Client, limit: u16, cursor: Option<&str
         .collect();
     print_table(ui, &rows);
 
-    if page.get("has_more").and_then(Value::as_bool) == Some(true) {
-        if let Some(next) = page.get("next_cursor").and_then(Value::as_str) {
-            println!("\n{} pulsesend emails list --limit {limit} --cursor {next}", ui::label("More:"));
-        }
+    if page.get("has_more").and_then(Value::as_bool) == Some(true)
+        && let Some(next) = page.get("next_cursor").and_then(Value::as_str)
+    {
+        println!("\n{} pulsesend emails list --limit {limit} --cursor {next}", ui::label("More:"));
     }
 
     Ok(())
@@ -469,7 +488,9 @@ fn body(inline: Option<&str>, file: Option<&str>) -> Result<Option<String>> {
 fn parse_headers(raw: &[String]) -> Result<Map<String, Value>> {
     let mut headers = Map::new();
     for h in raw {
-        let (name, value) = h.split_once(':').with_context(|| format!("header \"{h}\" must look like \"Name: value\""))?;
+        let (name, value) = h
+            .split_once(':')
+            .with_context(|| format!("header \"{h}\" must look like \"Name: value\""))?;
         headers.insert(name.trim().to_string(), json!(value.trim()));
     }
 
@@ -486,7 +507,10 @@ fn mode(key: &str) -> &'static str {
 
 fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
-    chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
+    chars
+        .next()
+        .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default()
 }
 
 fn str_of(v: &Value, key: &str) -> String {
@@ -508,7 +532,11 @@ fn print_table(ui: Ui, rows: &[[String; 5]]) {
     // Les colonnes longues (destinataires, sujet) sont coupées pour garder une ligne par email.
     const MAX: [usize; 5] = [40, 18, 32, 40, 20];
     let cell = |s: &str, i: usize| -> String {
-        if s.chars().count() > MAX[i] { s.chars().take(MAX[i] - 1).collect::<String>() + "…" } else { s.to_string() }
+        if s.chars().count() > MAX[i] {
+            s.chars().take(MAX[i] - 1).collect::<String>() + "…"
+        } else {
+            s.to_string()
+        }
     };
     // La colonne STATUS affiche « ● statut » : deux caractères de plus.
     let width = |s: &str, i: usize| cell(s, i).chars().count() + if i == 1 { 2 } else { 0 };
@@ -520,7 +548,11 @@ fn print_table(ui: Ui, rows: &[[String; 5]]) {
     }
     let pad = |text: String, visible: usize, w: usize| format!("{text}{}", " ".repeat(w.saturating_sub(visible)));
 
-    let header: Vec<String> = HEADERS.iter().enumerate().map(|(i, h)| pad(ui::label(h), h.chars().count(), widths[i])).collect();
+    let header: Vec<String> = HEADERS
+        .iter()
+        .enumerate()
+        .map(|(i, h)| pad(ui::label(h), h.chars().count(), widths[i]))
+        .collect();
     println!("{}", header.join("  ").trim_end());
 
     let animate = ui.animate() && std::io::stdout().is_terminal();
@@ -559,7 +591,10 @@ mod tests {
 
     #[test]
     fn trims_recipients() {
-        assert_eq!(trimmed(&[" a@x.com".into(), "".into(), "b@x.com ".into()]), vec!["a@x.com", "b@x.com"]);
+        assert_eq!(
+            trimmed(&[" a@x.com".into(), "".into(), "b@x.com ".into()]),
+            vec!["a@x.com", "b@x.com"]
+        );
     }
 
     #[test]

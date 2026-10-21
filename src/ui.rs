@@ -14,25 +14,37 @@ pub struct Ui {
     /// Spinners animés (stderr est un terminal, pas de --json).
     animate: bool,
     /// Aucune ligne de progression (--json).
-    quiet: bool, 
+    quiet: bool,
 }
 
 impl Ui {
     pub fn new(json: bool) -> Self {
-        Self { animate: !json && Term::stderr().is_term(), quiet: json }
+        Self {
+            animate: !json && Term::stderr().is_term(),
+            quiet: json,
+        }
     }
 
     /// Lance une étape : spinner animé, ou rien tant qu'elle n'est pas finie.
     pub fn step(&self, label: &str) -> Step {
         let bar = self.animate.then(|| {
             let bar = ProgressBar::new_spinner();
-            bar.set_style(ProgressStyle::with_template("{spinner:.blue} {msg}").expect("modèle valide").tick_strings(FRAMES));
+            bar.set_style(
+                ProgressStyle::with_template("{spinner:.blue} {msg}")
+                    .expect("modèle valide")
+                    .tick_strings(FRAMES),
+            );
             bar.set_message(format!("{label}…"));
             bar.enable_steady_tick(Duration::from_millis(80));
             bar
         });
 
-        Step { ui: *self, bar, label: label.to_string(), started: Instant::now() }
+        Step {
+            ui: *self,
+            bar,
+            label: label.to_string(),
+            started: Instant::now(),
+        }
     }
 
     /// Une étape déjà faite, sans attente.
@@ -117,7 +129,11 @@ impl Drop for Step {
 }
 
 fn dim_detail(detail: &str) -> String {
-    if detail.is_empty() { String::new() } else { format!("  {}", style(detail).dim()) }
+    if detail.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", style(detail).dim())
+    }
 }
 
 /// « ● delivered » dans la couleur du statut.
@@ -152,7 +168,11 @@ pub fn accent(text: &str) -> String {
 }
 
 pub fn mode(mode: &str) -> String {
-    if mode == "test" { style("test mode").yellow().to_string() } else { style("live mode").green().to_string() }
+    if mode == "test" {
+        style("test mode").yellow().to_string()
+    } else {
+        style("live mode").green().to_string()
+    }
 }
 
 /// Saisie masquée : chaque caractère s'affiche en « • », Retour arrière efface.
@@ -191,7 +211,11 @@ pub fn print_error(err: &anyhow::Error, base: &str) {
     let Some(api::Error::Api { status, body, request_id }) = err.downcast_ref::<api::Error>() else {
         let text = format!("{err:#}");
         if text.starts_with("no API key") {
-            eprintln!("{} {}", style("!").yellow().bold(), text.replacen("no API key", "No API key yet", 1));
+            eprintln!(
+                "{} {}",
+                style("!").yellow().bold(),
+                text.replacen("no API key", "No API key yet", 1)
+            );
         } else {
             eprintln!("{} {text}", style("✗").red().bold());
         }
@@ -201,7 +225,11 @@ pub fn print_error(err: &anyhow::Error, base: &str) {
     let title = body.message.as_deref().unwrap_or("API error");
     eprintln!("{} {}  {}", style("✗").red().bold(), style(title).red().bold(), style(status).dim());
 
-    let rows = [("code", body.code.as_deref()), ("field", body.param.as_deref()), ("request", request_id.as_deref())];
+    let rows = [
+        ("code", body.code.as_deref()),
+        ("field", body.param.as_deref()),
+        ("request", request_id.as_deref()),
+    ];
     for (name, value) in rows {
         if let Some(value) = value {
             eprintln!("  {}{value}", key(name, 9));

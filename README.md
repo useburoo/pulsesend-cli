@@ -1,32 +1,52 @@
 # pulsesend CLI
 
-Send and inspect PulseSend emails from the terminal. Single static binary, Rust.
-
-User docs: https://docs.pulse-send.jiordiviera.me/cli (source: `docs/cli.mdx`).
+Send and inspect transactional email with [PulseSend](https://pulse-send.jiordiviera.me) from your terminal. One static binary, no dependencies.
 
 ```bash
 curl -fsSL https://pulse-send.jiordiviera.me/install.sh | sh
 ```
 
-## Développer
+Or with Homebrew:
 
 ```bash
-cd cli
-cargo run -- --help
-PULSESEND_BASE_URL=https://pulsesend.test cargo run -- whoami   # contre l'app locale (lerd)
-cargo test
+brew install jiordiviera/tap/pulsesend
 ```
 
-- `src/main.rs` : commandes (clap) — login, logout, whoami, send, emails list/get.
-- `src/api.rs` : client HTTP (ureq + rustls) ; certificats intégrés + ceux du système (hors macOS).
-- `src/config.rs` : clé enregistrée dans `~/.config/pulsesend/config.json` (0600).
+Windows: download `pulsesend-<version>-x86_64-pc-windows-msvc.zip` from the [latest release](https://github.com/jiordiviera/pulsesend-cli/releases/latest) and put `pulsesend.exe` on your `PATH`.
 
-## Publier une version
+## Usage
 
-1. Monter `version` dans `Cargo.toml`.
-2. `cli/scripts/release.sh` construit les 5 cibles (Linux x86_64/ARM64 musl, macOS Intel/Apple Silicon, Windows) dans `cli/dist/<version>/`, avec une empreinte SHA-256 par archive.
-3. `cli/scripts/release.sh --upload` publie dans le bucket R2 public `pulse-send` sous `cli/<version>/`, puis `cli/latest.txt` en dernier (clés `R2_*` du `.env` de l'app).
+```bash
+pulsesend login                       # paste an API key from the dashboard
+pulsesend send --from "Acme <hello@acme.com>" --to customer@example.com \
+  --subject "Your code is 482910" --text "Your code is 482910" --wait
+pulsesend emails list
+pulsesend emails get em_01j9z…
+```
 
-Prérequis : rustup, `cargo install cargo-zigbuild`, zig dans le `PATH` (`pip install ziglang` dans un venv, ici `~/.local/share/pulsesend-zig`), zip.
+`--json` on any command prints the raw API response. In a terminal the CLI animates its steps; in a pipe or CI it prints plain lines, and `NO_COLOR` turns colors off.
 
-Le script d'installation est `public/install.sh` de l'app (servi sur `https://pulse-send.jiordiviera.me/install.sh`) : il ne change qu'avec un déploiement.
+Full documentation: https://docs.pulse-send.jiordiviera.me/cli
+
+## Development
+
+```bash
+cargo run -- --help
+PULSESEND_BASE_URL=https://pulsesend.test cargo run -- whoami   # against a local PulseSend
+cargo test && cargo clippy --all-targets -- -D warnings
+```
+
+- `src/main.rs`: commands (clap)
+- `src/api.rs`: HTTP client (ureq + rustls, bundled roots plus the system's outside macOS)
+- `src/ui.rs`: spinners, steps, colors, error box
+- `src/config.rs`: saved key in `~/.config/pulsesend/config.json` (mode 0600)
+
+## Releases
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`: native builds for Linux (x86_64, ARM64, static musl), macOS (Intel, Apple Silicon) and Windows, each smoke-tested, then a GitHub release, the same archives on `media.pulse-send.jiordiviera.me/cli/<version>/` for the install script, and the Homebrew formula in [jiordiviera/homebrew-tap](https://github.com/jiordiviera/homebrew-tap). The tag must match `version` in `Cargo.toml`.
+
+This repository mirrors the `cli/` folder of the PulseSend monorepo.
+
+## License
+
+MIT

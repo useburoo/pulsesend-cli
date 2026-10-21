@@ -1,7 +1,11 @@
 [package]
 name = "pulsesend"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
+description = "Send transactional email with PulseSend from your terminal"
+license = "MIT"
+repository = "https://github.com/jiordiviera/pulsesend-cli"
+homepage = "https://docs.pulse-send.jiordiviera.me/cli"
 
 [dependencies]
 anyhow = "1.0.104"
