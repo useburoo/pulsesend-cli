@@ -12,6 +12,7 @@ set -eu
 cd "$(dirname "$0")/.."
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 dist="dist/$version"
+# Windows en gnu ici (zig ne sait pas faire msvc) ; la CI GitHub publie la version msvc.
 targets="x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-gnu"
 
 rustup target add $targets > /dev/null
