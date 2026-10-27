@@ -83,6 +83,9 @@ struct SendArgs {
     /// Custom header, "Name: value". Repeatable (20 max).
     #[arg(long = "header")]
     headers: Vec<String>,
+    /// File to attach, sent as base64. Repeatable (20 max, 25 MB for the whole email).
+    #[arg(long = "attach")]
+    attachments: Vec<String>,
     /// Makes retries safe: the same key within 24 hours returns the first response.
     #[arg(long)]
     idempotency_key: Option<String>,
@@ -295,6 +298,9 @@ fn send(cli: &Cli, ui: Ui, client: &api::Client, args: &SendArgs) -> Result<Exit
     }
     if !args.headers.is_empty() {
         payload.insert("headers".into(), Value::Object(parse_headers(&args.headers)?));
+    }
+    if !args.attachments.is_empty() {
+        payload.insert("attachments".into(), Value::Array(read_attachments(&args.attachments)?));
     }
     ui.ok("Options checked", "");
 
@@ -578,6 +584,42 @@ fn print_table(ui: Ui, rows: &[[String; 5]]) {
     }
 }
 
+/// Lit les fichiers de --attach et les envoie en base64 avec leur nom (sans chemin).
+fn read_attachments(paths: &[String]) -> Result<Vec<Value>> {
+    if paths.len() > 20 {
+        bail!("at most 20 attachments per email (--attach)");
+    }
+    paths
+        .iter()
+        .map(|path| {
+            let bytes = std::fs::read(path).with_context(|| format!("cannot read {path}"))?;
+            let filename = std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .with_context(|| format!("{path} has no file name"))?;
+            Ok(json!({ "filename": filename, "content": base64_encode(&bytes) }))
+        })
+        .collect()
+}
+
+/// Base64 standard (RFC 4648), avec remplissage. Assez petit pour ne pas ajouter de dépendance.
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[((n >> (18 - 6 * i)) & 0x3f) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -609,6 +651,17 @@ mod tests {
         let k = ui::key("id", 9);
         assert_eq!(console::measure_text_width(&k), 9);
         assert!(k.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn base64_matches_rfc4648_vectors() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
     }
 
     #[test]
