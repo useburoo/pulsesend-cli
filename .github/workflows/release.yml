@@ -139,7 +139,7 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
           ssh-keyscan github.com >> ~/.ssh/known_hosts 2> /dev/null
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/tap" git clone --depth 1 git@github.com:jiordiviera/homebrew-tap.git tap
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/tap" git clone --depth 1 git@github.com:useburoo/homebrew-tap.git tap
 
           mkdir -p tap/Formula
           cat > tap/Formula/pulsesend.rb <<RUBY
