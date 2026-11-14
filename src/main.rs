@@ -1,5 +1,5 @@
 //! pulsesend : CLI de l'API PulseSend (envoi d'emails transactionnels).
-//! Commandes : login, logout, whoami, send, emails, domains, webhooks.
+//! Commandes : login, logout, whoami, send, batch, emails, domains, webhooks.
 //! Résultats sur stdout ; étapes et spinners sur stderr (voir ui.rs).
 
 mod api;
@@ -49,6 +49,14 @@ enum Command {
     /// List and inspect sent emails.
     #[command(subcommand)]
     Emails(EmailsCommand),
+    /// Send up to 100 emails at once from a JSON array (file, or "-" for stdin). All or nothing.
+    Batch {
+        /// JSON file holding an array of emails, each with the fields of `send` (no attachments).
+        file: String,
+        /// Makes retries safe: the same key within 24 hours returns the first response.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
     /// Add, verify and remove sending domains (needs the domains:write scope).
     #[command(subcommand)]
     Domains(domains::DomainsCommand),
@@ -97,6 +105,9 @@ struct SendArgs {
     /// Makes retries safe: the same key within 24 hours returns the first response.
     #[arg(long)]
     idempotency_key: Option<String>,
+    /// Send later: an ISO 8601 date, e.g. 2026-11-20T09:00:00Z (30 days ahead at most).
+    #[arg(long, conflicts_with = "wait")]
+    scheduled_at: Option<String>,
     /// Wait until the email is delivered (or bounces). Exits with 1 if it is not delivered.
     #[arg(long)]
     wait: bool,
@@ -120,6 +131,19 @@ enum EmailsCommand {
     Get {
         /// Email id (em_…).
         id: String,
+    },
+    /// Cancel a scheduled email and get its credits back.
+    Cancel {
+        /// Email id (em_…).
+        id: String,
+    },
+    /// Move the send time of a scheduled email.
+    Reschedule {
+        /// Email id (em_…).
+        id: String,
+        /// New send time, ISO 8601, e.g. 2026-11-20T09:00:00Z.
+        #[arg(long)]
+        at: String,
     },
 }
 
@@ -176,6 +200,11 @@ fn run(cli: &Cli, ui: Ui, base: &str) -> Result<ExitCode> {
             list(cli, ui, &client, *limit, cursor.as_deref()).map(|()| ExitCode::SUCCESS)
         }
         Command::Emails(EmailsCommand::Get { id }) => get(cli, ui, &client, id).map(|()| ExitCode::SUCCESS),
+        Command::Emails(EmailsCommand::Cancel { id }) => change(cli, ui, &client, id, "Canceling", "Canceled, credits refunded", None),
+        Command::Emails(EmailsCommand::Reschedule { id, at }) => {
+            change(cli, ui, &client, id, "Rescheduling", &format!("Scheduled for {at}"), Some(at))
+        }
+        Command::Batch { file, idempotency_key } => batch(cli, ui, &client, file, idempotency_key.as_deref()).map(|()| ExitCode::SUCCESS),
         Command::Domains(command) => domains::run(cli, ui, &client, command),
         Command::Webhooks(command) => webhooks::run(cli, ui, &client, command),
         Command::Login | Command::Logout => unreachable!(),
@@ -312,6 +341,9 @@ fn send(cli: &Cli, ui: Ui, client: &api::Client, args: &SendArgs) -> Result<Exit
     if !args.attachments.is_empty() {
         payload.insert("attachments".into(), Value::Array(read_attachments(&args.attachments)?));
     }
+    if let Some(at) = &args.scheduled_at {
+        payload.insert("scheduled_at".into(), json!(at));
+    }
     ui.ok("Options checked", "");
 
     let step = ui.step("Sending to the API");
@@ -323,7 +355,14 @@ fn send(cli: &Cli, ui: Ui, client: &api::Client, args: &SendArgs) -> Result<Exit
         }
     };
     let ms = step.elapsed().as_millis();
-    step.done("Queued", &format!("{} · {ms} ms", str_of(&email, "id")));
+    if str_of(&email, "status") == "scheduled" {
+        step.done(
+            &format!("Scheduled for {}", str_of(&email, "scheduled_at")),
+            &format!("{} · {ms} ms", str_of(&email, "id")),
+        );
+    } else {
+        step.done("Queued", &format!("{} · {ms} ms", str_of(&email, "id")));
+    }
 
     let mut code = ExitCode::SUCCESS;
     if args.wait {
@@ -484,10 +523,97 @@ fn get(cli: &Cli, ui: Ui, client: &api::Client, id: &str) -> Result<()> {
     lines.push(("mode", ui::mode(if test { "test" } else { "live" })));
     lines.push(("credits", email.get("credits_charged").map(Value::to_string).unwrap_or_default()));
     lines.push(("created", str_of(&email, "created_at")));
+    let scheduled = str_of(&email, "scheduled_at");
+    if !scheduled.is_empty() {
+        lines.push(("scheduled", scheduled));
+    }
 
     for (name, value) in lines {
         println!("{}{value}", ui::key(name, 10));
     }
+
+    Ok(())
+}
+
+/// Annule (sans `at`) ou reprogramme un email encore « scheduled ».
+fn change(cli: &Cli, ui: Ui, client: &api::Client, id: &str, doing: &str, done: &str, at: Option<&str>) -> Result<ExitCode> {
+    let step = ui.step(&format!("{doing} {id}"));
+    let result = match at {
+        Some(at) => client.patch(&format!("emails/{id}"), &json!({ "scheduled_at": at })),
+        None => client.post(&format!("emails/{id}/cancel"), &json!({}), None),
+    };
+    let email = match result {
+        Ok(e) => e,
+        Err(e) => {
+            step.fail(&format!("{doing} failed"), "");
+            return Err(e.into());
+        }
+    };
+    step.done(done, "");
+
+    if cli.json {
+        print_json(&email);
+    } else {
+        ui.blank();
+        print_summary(&email);
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Envoie le tableau JSON d'un fichier (ou de stdin) à POST /emails/batch.
+fn batch(cli: &Cli, ui: Ui, client: &api::Client, file: &str, idempotency_key: Option<&str>) -> Result<()> {
+    let raw = body(None, Some(file))?.unwrap_or_default();
+    let emails: Value = serde_json::from_str(&raw).with_context(|| format!("{file} is not valid JSON"))?;
+    let count = match emails.as_array() {
+        Some(list) if !list.is_empty() => list.len(),
+        _ => bail!("{file} must hold a JSON array of emails"),
+    };
+    let plural = if count == 1 { "email" } else { "emails" };
+    ui.ok("Batch read", &format!("{count} {plural}"));
+
+    let step = ui.step("Sending the batch");
+    let page = match client.post("emails/batch", &emails, idempotency_key) {
+        Ok(p) => p,
+        Err(e) => {
+            step.fail("Nothing sent", "the batch is all or nothing");
+            return Err(e.into());
+        }
+    };
+    let ms = step.elapsed().as_millis();
+    step.done(&format!("{count} {plural} accepted"), &format!("{ms} ms"));
+
+    if cli.json {
+        print_json(&page);
+        return Ok(());
+    }
+
+    let rows: Vec<[String; 4]> = page
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|e| {
+            [
+                str_of(e, "id"),
+                str_of(e, "status"),
+                e.get("to").and_then(Value::as_array).map(|a| join(a)).unwrap_or_default(),
+                str_of(e, "subject"),
+            ]
+        })
+        .collect();
+    ui.blank();
+    print_table(
+        ui,
+        [
+            Col::Dim("ID", 40),
+            Col::Status("STATUS"),
+            Col::Plain("TO", 32),
+            Col::Dim("SUBJECT", 40),
+        ],
+        &rows,
+    );
 
     Ok(())
 }

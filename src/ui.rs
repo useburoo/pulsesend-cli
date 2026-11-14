@@ -145,7 +145,7 @@ pub fn status(status: &str) -> String {
         "missing" | "disabled" => style(dot).yellow().to_string(),
         "bounced" | "failed" | "failing" => style(dot).red().bold().to_string(),
         "complained" => style(dot).yellow().bold().to_string(),
-        "delivery_delayed" => style(dot).blue().to_string(),
+        "delivery_delayed" | "scheduled" => style(dot).blue().to_string(),
         "canceled" => style(dot).dim().to_string(),
         _ => style(dot).white().to_string(),
     }
