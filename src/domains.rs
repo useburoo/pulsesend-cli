@@ -40,6 +40,9 @@ pub enum DomainsCommand {
         /// Count clicks by rewriting links: on or off.
         #[arg(long, value_name = "on|off", value_parser = crate::parse_switch)]
         track_clicks: Option<bool>,
+        /// Your own subdomain for tracked links, e.g. links.acme.com, or `off` to remove it.
+        #[arg(long, value_name = "host|off")]
+        tracking_domain: Option<String>,
     },
     /// Check the DNS records now.
     Verify {
@@ -90,10 +93,11 @@ pub fn run(cli: &Cli, ui: Ui, client: &api::Client, command: &DomainsCommand) ->
             domain,
             track_opens,
             track_clicks,
+            tracking_domain,
         } => {
-            let body = update_body(*track_opens, *track_clicks);
+            let body = update_body(*track_opens, *track_clicks, tracking_domain.as_deref());
             if body.as_object().is_some_and(serde_json::Map::is_empty) {
-                anyhow::bail!("Nothing to update: pass --track-opens or --track-clicks.");
+                anyhow::bail!("Nothing to update: pass --track-opens, --track-clicks or --tracking-domain.");
             }
             let step = ui.step(&format!("Updating {domain}"));
             let updated = match client.patch(&path(domain), &body) {
@@ -106,6 +110,9 @@ pub fn run(cli: &Cli, ui: Ui, client: &api::Client, command: &DomainsCommand) ->
             step.done(&format!("Updated {}", str_of(&updated, "name")), &tracking_line(&updated));
             if cli.json {
                 print_json(&updated);
+            } else if let Some(line) = tracking_record_line(&updated) {
+                ui.blank();
+                println!("Add this record at your DNS provider: {line}");
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -226,8 +233,8 @@ fn verify(cli: &Cli, ui: Ui, client: &api::Client, domain: &str, wait: bool, tim
     Ok(if verified { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }
 
-/// Seuls les réglages passés partent : l'autre reste tel quel.
-fn update_body(opens: Option<bool>, clicks: Option<bool>) -> Value {
+/// Seuls les réglages passés partent : les autres restent tels quels. `off` retire le domaine de suivi.
+fn update_body(opens: Option<bool>, clicks: Option<bool>, tracking_domain: Option<&str>) -> Value {
     let mut body = serde_json::Map::new();
     if let Some(on) = opens {
         body.insert("track_opens".into(), json!(on));
@@ -235,7 +242,33 @@ fn update_body(opens: Option<bool>, clicks: Option<bool>) -> Value {
     if let Some(on) = clicks {
         body.insert("track_clicks".into(), json!(on));
     }
+    if let Some(host) = tracking_domain.map(str::trim) {
+        let off = host.is_empty() || ["off", "none"].contains(&host.to_ascii_lowercase().as_str());
+        body.insert("tracking_domain".into(), if off { Value::Null } else { json!(host) });
+    }
     Value::Object(body)
+}
+
+/// « links.acme.com (pending) », ou vide sans domaine de suivi.
+fn tracking_domain_line(domain: &Value) -> String {
+    let tracking = domain.get("tracking").cloned().unwrap_or_default();
+    match tracking.get("domain").and_then(Value::as_str) {
+        Some(host) => {
+            let status = tracking.get("domain_status").and_then(Value::as_str).unwrap_or("pending");
+            format!("{host} ({status})")
+        }
+        None => String::new(),
+    }
+}
+
+/// Le CNAME à publier tant que le domaine de suivi n'est pas actif : « CNAME links → track.… ».
+fn tracking_record_line(domain: &Value) -> Option<String> {
+    let tracking = domain.get("tracking")?;
+    if tracking.get("domain_status").and_then(Value::as_str) == Some("active") {
+        return None;
+    }
+    let record = tracking.get("domain_record").filter(|r| r.is_object())?;
+    Some(format!("CNAME {} → {}", str_of(record, "host"), str_of(record, "value")))
 }
 
 /// « opens on · clicks off ».
@@ -282,8 +315,15 @@ fn show(cli: &Cli, ui: Ui, domain: &Value, hint: bool) {
         lines.push(("dns", provider));
     }
     lines.push(("tracking", tracking_line(domain)));
+    let host = tracking_domain_line(domain);
+    if !host.is_empty() {
+        lines.push(("links", host));
+    }
     for (name, value) in lines {
         println!("{}{value}", ui::key(name, 9));
+    }
+    if let Some(line) = tracking_record_line(domain) {
+        println!("{}{line}", ui::key("", 9));
     }
     println!();
 
@@ -343,9 +383,23 @@ mod tests {
 
     #[test]
     fn builds_tracking_updates() {
-        assert_eq!(update_body(Some(true), None), json!({ "track_opens": true }));
-        assert_eq!(update_body(None, Some(false)), json!({ "track_clicks": false }));
-        assert_eq!(update_body(None, None), json!({}));
+        assert_eq!(update_body(Some(true), None, None), json!({ "track_opens": true }));
+        assert_eq!(update_body(None, Some(false), None), json!({ "track_clicks": false }));
+        assert_eq!(update_body(None, None, None), json!({}));
+        assert_eq!(
+            update_body(None, None, Some("links.acme.com")),
+            json!({ "tracking_domain": "links.acme.com" })
+        );
+        assert_eq!(update_body(None, None, Some("off")), json!({ "tracking_domain": null }));
+        let pending = json!({ "tracking": {
+            "domain": "links.acme.com",
+            "domain_status": "pending",
+            "domain_record": { "host": "links", "value": "track.example.com" }
+        } });
+        assert_eq!(tracking_domain_line(&pending), "links.acme.com (pending)");
+        assert_eq!(tracking_record_line(&pending).as_deref(), Some("CNAME links → track.example.com"));
+        assert_eq!(tracking_record_line(&json!({ "tracking": { "domain_status": "active" } })), None);
+        assert_eq!(tracking_domain_line(&json!({})), "");
         assert_eq!(
             tracking_line(&json!({ "tracking": { "opens": true, "clicks": false } })),
             "opens on · clicks off"
