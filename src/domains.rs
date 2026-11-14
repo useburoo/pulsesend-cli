@@ -30,6 +30,17 @@ pub enum DomainsCommand {
         /// Domain name or id (dom_…).
         domain: String,
     },
+    /// Turn open and click tracking on or off for the emails sent from a domain.
+    Update {
+        /// Domain name or id (dom_…).
+        domain: String,
+        /// Count opens with a tracking pixel: on or off.
+        #[arg(long, value_name = "on|off", value_parser = crate::parse_switch)]
+        track_opens: Option<bool>,
+        /// Count clicks by rewriting links: on or off.
+        #[arg(long, value_name = "on|off", value_parser = crate::parse_switch)]
+        track_clicks: Option<bool>,
+    },
     /// Check the DNS records now.
     Verify {
         /// Domain name or id (dom_…).
@@ -73,6 +84,29 @@ pub fn run(cli: &Cli, ui: Ui, client: &api::Client, command: &DomainsCommand) ->
             let found = client.get(&path(domain), &[]);
             step.clear();
             show(cli, ui, &found?, false);
+            Ok(ExitCode::SUCCESS)
+        }
+        DomainsCommand::Update {
+            domain,
+            track_opens,
+            track_clicks,
+        } => {
+            let body = update_body(*track_opens, *track_clicks);
+            if body.as_object().is_some_and(serde_json::Map::is_empty) {
+                anyhow::bail!("Nothing to update: pass --track-opens or --track-clicks.");
+            }
+            let step = ui.step(&format!("Updating {domain}"));
+            let updated = match client.patch(&path(domain), &body) {
+                Ok(d) => d,
+                Err(e) => {
+                    step.fail("Not updated", "");
+                    return Err(e.into());
+                }
+            };
+            step.done(&format!("Updated {}", str_of(&updated, "name")), &tracking_line(&updated));
+            if cli.json {
+                print_json(&updated);
+            }
             Ok(ExitCode::SUCCESS)
         }
         DomainsCommand::Verify {
@@ -192,6 +226,31 @@ fn verify(cli: &Cli, ui: Ui, client: &api::Client, domain: &str, wait: bool, tim
     Ok(if verified { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }
 
+/// Seuls les réglages passés partent : l'autre reste tel quel.
+fn update_body(opens: Option<bool>, clicks: Option<bool>) -> Value {
+    let mut body = serde_json::Map::new();
+    if let Some(on) = opens {
+        body.insert("track_opens".into(), json!(on));
+    }
+    if let Some(on) = clicks {
+        body.insert("track_clicks".into(), json!(on));
+    }
+    Value::Object(body)
+}
+
+/// « opens on · clicks off ».
+fn tracking_line(domain: &Value) -> String {
+    let tracking = domain.get("tracking").cloned().unwrap_or_default();
+    let state = |k: &str| {
+        if tracking.get(k).and_then(Value::as_bool) == Some(true) {
+            "on"
+        } else {
+            "off"
+        }
+    };
+    format!("opens {} · clicks {}", state("opens"), state("clicks"))
+}
+
 fn records(domain: &Value) -> Vec<Value> {
     domain.get("records").and_then(Value::as_array).cloned().unwrap_or_default()
 }
@@ -222,6 +281,7 @@ fn show(cli: &Cli, ui: Ui, domain: &Value, hint: bool) {
     if !provider.is_empty() {
         lines.push(("dns", provider));
     }
+    lines.push(("tracking", tracking_line(domain)));
     for (name, value) in lines {
         println!("{}{value}", ui::key(name, 9));
     }
@@ -279,5 +339,17 @@ mod tests {
         assert_eq!(path(" acme.com "), "domains/acme.com");
         assert_eq!(yes_no(&json!({ "spf": true }), "spf"), "yes");
         assert_eq!(yes_no(&json!({}), "dmarc"), "no");
+    }
+
+    #[test]
+    fn builds_tracking_updates() {
+        assert_eq!(update_body(Some(true), None), json!({ "track_opens": true }));
+        assert_eq!(update_body(None, Some(false)), json!({ "track_clicks": false }));
+        assert_eq!(update_body(None, None), json!({}));
+        assert_eq!(
+            tracking_line(&json!({ "tracking": { "opens": true, "clicks": false } })),
+            "opens on · clicks off"
+        );
+        assert_eq!(tracking_line(&json!({})), "opens off · clicks off");
     }
 }

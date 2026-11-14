@@ -105,6 +105,12 @@ struct SendArgs {
     /// Makes retries safe: the same key within 24 hours returns the first response.
     #[arg(long)]
     idempotency_key: Option<String>,
+    /// Count opens with a tracking pixel: on or off. Defaults to the domain setting.
+    #[arg(long, value_name = "on|off", value_parser = parse_switch)]
+    track_opens: Option<bool>,
+    /// Count clicks by rewriting links: on or off. Defaults to the domain setting.
+    #[arg(long, value_name = "on|off", value_parser = parse_switch)]
+    track_clicks: Option<bool>,
     /// Send later: an ISO 8601 date, e.g. 2026-11-20T09:00:00Z (30 days ahead at most).
     #[arg(long, conflicts_with = "wait")]
     scheduled_at: Option<String>,
@@ -341,6 +347,12 @@ fn send(cli: &Cli, ui: Ui, client: &api::Client, args: &SendArgs) -> Result<Exit
     if !args.attachments.is_empty() {
         payload.insert("attachments".into(), Value::Array(read_attachments(&args.attachments)?));
     }
+    if let Some(on) = args.track_opens {
+        payload.insert("track_opens".into(), json!(on));
+    }
+    if let Some(on) = args.track_clicks {
+        payload.insert("track_clicks".into(), json!(on));
+    }
     if let Some(at) = &args.scheduled_at {
         payload.insert("scheduled_at".into(), json!(at));
     }
@@ -527,6 +539,9 @@ fn get(cli: &Cli, ui: Ui, client: &api::Client, id: &str) -> Result<()> {
     if !scheduled.is_empty() {
         lines.push(("scheduled", scheduled));
     }
+    if let Some(tracking) = email.get("tracking") {
+        lines.push(("tracking", tracking_summary(tracking)));
+    }
 
     for (name, value) in lines {
         println!("{}{value}", ui::key(name, 10));
@@ -642,6 +657,32 @@ fn parse_headers(raw: &[String]) -> Result<Map<String, Value>> {
     }
 
     Ok(headers)
+}
+
+/// « on » / « off » (ou true/false, yes/no) pour les options de suivi.
+pub(crate) fn parse_switch(value: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" => Ok(true),
+        "off" | "false" | "no" | "0" => Ok(false),
+        _ => Err("expected on or off".into()),
+    }
+}
+
+/// « 3 opens · 1 click », ou « off » pour ce qui n'est pas suivi.
+fn tracking_summary(tracking: &Value) -> String {
+    let part = |flag: &str, count: &str, one: &str, many: &str| {
+        if tracking.get(flag).and_then(Value::as_bool) != Some(true) {
+            return format!("{many} off");
+        }
+        let n = tracking.get(count).and_then(Value::as_u64).unwrap_or(0);
+        format!("{n} {}", if n == 1 { one } else { many })
+    };
+
+    format!(
+        "{} · {}",
+        part("opens", "open_count", "open", "opens"),
+        part("clicks", "click_count", "click", "clicks")
+    )
 }
 
 fn trimmed(values: &[String]) -> Vec<String> {
@@ -792,6 +833,17 @@ fn base64_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_tracking_switches() {
+        assert_eq!(parse_switch("on"), Ok(true));
+        assert_eq!(parse_switch(" OFF "), Ok(false));
+        assert!(parse_switch("maybe").is_err());
+        let t = json!({ "opens": true, "clicks": false, "open_count": 1, "click_count": 0 });
+        assert_eq!(tracking_summary(&t), "1 open · clicks off");
+        let t = json!({ "opens": true, "clicks": true, "open_count": 3, "click_count": 2 });
+        assert_eq!(tracking_summary(&t), "3 opens · 2 clicks");
+    }
 
     #[test]
     fn parses_headers() {
