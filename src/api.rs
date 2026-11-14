@@ -111,8 +111,18 @@ impl Client {
         Self::finish(req.send_json(body))
     }
 
+    pub fn patch(&self, path: &str, body: &Value) -> Result<Value, Error> {
+        Self::finish(self.auth(self.agent.request("PATCH", &self.url(path))).send_json(body))
+    }
+
+    /// DELETE : l'API répond 204 sans corps, rendu comme `null`.
+    pub fn delete(&self, path: &str) -> Result<Value, Error> {
+        Self::finish(self.auth(self.agent.delete(&self.url(path))).call())
+    }
+
     fn finish(result: Result<ureq::Response, ureq::Error>) -> Result<Value, Error> {
         match result {
+            Ok(resp) if resp.status() == 204 => Ok(Value::Null),
             Ok(resp) => resp.into_json::<Value>().map_err(|e| Error::Decode(e.to_string())),
             Err(ureq::Error::Status(status, resp)) => {
                 let request_id = resp.header("X-Request-Id").map(str::to_string);

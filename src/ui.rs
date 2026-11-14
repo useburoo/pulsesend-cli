@@ -5,6 +5,7 @@
 use crate::api;
 use console::{Key, Term, style};
 use indicatif::{ProgressBar, ProgressStyle};
+use std::io::IsTerminal;
 use std::time::{Duration, Instant};
 
 const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "⠏"];
@@ -140,8 +141,9 @@ fn dim_detail(detail: &str) -> String {
 pub fn status(status: &str) -> String {
     let dot = format!("● {status}");
     match status {
-        "delivered" => style(dot).green().bold().to_string(),
-        "bounced" | "failed" => style(dot).red().bold().to_string(),
+        "delivered" | "verified" | "found" | "enabled" => style(dot).green().bold().to_string(),
+        "missing" | "disabled" => style(dot).yellow().to_string(),
+        "bounced" | "failed" | "failing" => style(dot).red().bold().to_string(),
         "complained" => style(dot).yellow().bold().to_string(),
         "delivery_delayed" => style(dot).blue().to_string(),
         "canceled" => style(dot).dim().to_string(),
@@ -256,4 +258,16 @@ fn hint(code: Option<&str>, base: &str) -> Option<String> {
         "rate_limited" => "Too many requests: wait a second and retry".to_string(),
         _ => return None,
     })
+}
+
+/// Demande « oui / non » sur le terminal (non par défaut). Hors terminal, refuse : passer --yes.
+pub fn confirm(question: &str) -> anyhow::Result<bool> {
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!("no terminal to confirm in: pass --yes");
+    }
+    let term = Term::stderr();
+    term.write_str(&format!("{} {question} {} ", style("?").blue().bold(), style("[y/N]").dim()))?;
+    let answer = term.read_line()?;
+
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes" | "o" | "oui"))
 }

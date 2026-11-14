@@ -1,10 +1,12 @@
 //! pulsesend : CLI de l'API PulseSend (envoi d'emails transactionnels).
-//! Commandes : login, logout, whoami, send, emails list, emails get.
+//! Commandes : login, logout, whoami, send, emails, domains, webhooks.
 //! Résultats sur stdout ; étapes et spinners sur stderr (voir ui.rs).
 
 mod api;
 mod config;
+mod domains;
 mod ui;
+mod webhooks;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
@@ -47,6 +49,12 @@ enum Command {
     /// List and inspect sent emails.
     #[command(subcommand)]
     Emails(EmailsCommand),
+    /// Add, verify and remove sending domains (needs the domains:write scope).
+    #[command(subcommand)]
+    Domains(domains::DomainsCommand),
+    /// Manage webhook endpoints (needs the webhooks:read and webhooks:write scopes).
+    #[command(subcommand)]
+    Webhooks(webhooks::WebhooksCommand),
 }
 
 #[derive(Args)]
@@ -168,6 +176,8 @@ fn run(cli: &Cli, ui: Ui, base: &str) -> Result<ExitCode> {
             list(cli, ui, &client, *limit, cursor.as_deref()).map(|()| ExitCode::SUCCESS)
         }
         Command::Emails(EmailsCommand::Get { id }) => get(cli, ui, &client, id).map(|()| ExitCode::SUCCESS),
+        Command::Domains(command) => domains::run(cli, ui, &client, command),
+        Command::Webhooks(command) => webhooks::run(cli, ui, &client, command),
         Command::Login | Command::Logout => unreachable!(),
     }
 }
@@ -426,13 +436,18 @@ fn list(cli: &Cli, ui: Ui, client: &api::Client, limit: u16, cursor: Option<&str
             ]
         })
         .collect();
-    print_table(ui, &rows);
-
-    if page.get("has_more").and_then(Value::as_bool) == Some(true)
-        && let Some(next) = page.get("next_cursor").and_then(Value::as_str)
-    {
-        println!("\n{} pulsesend emails list --limit {limit} --cursor {next}", ui::label("More:"));
-    }
+    print_table(
+        ui,
+        [
+            Col::Dim("ID", 40),
+            Col::Status("STATUS"),
+            Col::Plain("TO", 32),
+            Col::Dim("SUBJECT", 40),
+            Col::Plain("SENT", 20),
+        ],
+        &rows,
+    );
+    print_next(&page, "emails list", limit);
 
     Ok(())
 }
@@ -531,22 +546,42 @@ fn print_json(v: &Value) {
     println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
 }
 
-/// Tableau des emails : en-tête grisé, statut en couleur ; les lignes arrivent une à une
-/// dans un terminal.
-fn print_table(ui: Ui, rows: &[[String; 5]]) {
-    const HEADERS: [&str; 5] = ["ID", "STATUS", "TO", "SUBJECT", "SENT"];
-    // Les colonnes longues (destinataires, sujet) sont coupées pour garder une ligne par email.
-    const MAX: [usize; 5] = [40, 18, 32, 40, 20];
+/// Colonnes d'un tableau : titre, largeur maximale (au-delà, coupée par « … ») et rendu.
+#[derive(Clone, Copy)]
+enum Col {
+    Plain(&'static str, usize),
+    Dim(&'static str, usize),
+    Status(&'static str),
+}
+
+impl Col {
+    fn title(self) -> &'static str {
+        match self {
+            Col::Plain(t, _) | Col::Dim(t, _) | Col::Status(t) => t,
+        }
+    }
+
+    fn max(self) -> usize {
+        match self {
+            Col::Plain(_, m) | Col::Dim(_, m) => m,
+            Col::Status(_) => 20,
+        }
+    }
+}
+
+/// Tableau : en-tête grisé, statut en couleur ; les lignes arrivent une à une dans un terminal.
+fn print_table<const N: usize>(ui: Ui, cols: [Col; N], rows: &[[String; N]]) {
     let cell = |s: &str, i: usize| -> String {
-        if s.chars().count() > MAX[i] {
-            s.chars().take(MAX[i] - 1).collect::<String>() + "…"
+        let max = cols[i].max();
+        if s.chars().count() > max {
+            s.chars().take(max - 1).collect::<String>() + "…"
         } else {
             s.to_string()
         }
     };
-    // La colonne STATUS affiche « ● statut » : deux caractères de plus.
-    let width = |s: &str, i: usize| cell(s, i).chars().count() + if i == 1 { 2 } else { 0 };
-    let mut widths = HEADERS.map(|h| h.chars().count());
+    // Une colonne de statut affiche « ● statut » : deux caractères de plus.
+    let width = |s: &str, i: usize| cell(s, i).chars().count() + if matches!(cols[i], Col::Status(_)) { 2 } else { 0 };
+    let mut widths = cols.map(|c| c.title().chars().count());
     for row in rows {
         for (i, c) in row.iter().enumerate() {
             widths[i] = widths[i].max(width(c, i));
@@ -554,33 +589,41 @@ fn print_table(ui: Ui, rows: &[[String; 5]]) {
     }
     let pad = |text: String, visible: usize, w: usize| format!("{text}{}", " ".repeat(w.saturating_sub(visible)));
 
-    let header: Vec<String> = HEADERS
+    let header: Vec<String> = cols
         .iter()
         .enumerate()
-        .map(|(i, h)| pad(ui::label(h), h.chars().count(), widths[i]))
+        .map(|(i, c)| pad(ui::label(c.title()), c.title().chars().count(), widths[i]))
         .collect();
     println!("{}", header.join("  ").trim_end());
 
     let animate = ui.animate() && std::io::stdout().is_terminal();
     for row in rows {
-        let cols: Vec<String> = row
+        let line: Vec<String> = row
             .iter()
             .enumerate()
             .map(|(i, c)| {
                 let visible = width(c, i);
-                let text = match i {
-                    0 => ui::label(&cell(c, i)),
-                    1 => ui::status(c),
-                    3 => ui::label(&cell(c, i)),
-                    _ => cell(c, i),
+                let text = match cols[i] {
+                    Col::Dim(..) => ui::label(&cell(c, i)),
+                    Col::Status(_) => ui::status(c),
+                    Col::Plain(..) => cell(c, i),
                 };
                 pad(text, visible, widths[i])
             })
             .collect();
-        println!("{}", cols.join("  ").trim_end());
+        println!("{}", line.join("  ").trim_end());
         if animate {
             std::thread::sleep(Duration::from_millis(18));
         }
+    }
+}
+
+/// « Suite : … » quand une page en a une autre.
+fn print_next(page: &Value, command: &str, limit: u16) {
+    if page.get("has_more").and_then(Value::as_bool) == Some(true)
+        && let Some(next) = page.get("next_cursor").and_then(Value::as_str)
+    {
+        println!("\n{} pulsesend {command} --limit {limit} --cursor {next}", ui::label("More:"));
     }
 }
 
