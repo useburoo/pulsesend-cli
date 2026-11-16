@@ -3,6 +3,7 @@
 //! Résultats sur stdout ; étapes et spinners sur stderr (voir ui.rs).
 
 mod api;
+mod browser_login;
 mod config;
 mod domains;
 mod ui;
@@ -38,8 +39,12 @@ struct Cli {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)] // une seule commande analysée par exécution
 enum Command {
-    /// Save an API key for the next commands.
-    Login,
+    /// Connect the CLI to your account in the browser, or save a key with --api-key.
+    Login {
+        /// Type or paste an API key instead of opening the browser.
+        #[arg(long)]
+        paste: bool,
+    },
     /// Remove the saved API key.
     Logout,
     /// Show which key and API the CLI uses, and check that the key works.
@@ -180,7 +185,7 @@ fn run(cli: &Cli, ui: Ui, base: &str) -> Result<ExitCode> {
     let saved = config::load()?;
 
     match &cli.command {
-        Command::Login => return login(cli, ui, base).map(|()| ExitCode::SUCCESS),
+        Command::Login { paste } => return login(cli, ui, base, *paste).map(|()| ExitCode::SUCCESS),
         Command::Logout => {
             if config::delete()? {
                 ui.ok("Logged out", "the saved API key was removed");
@@ -213,11 +218,49 @@ fn run(cli: &Cli, ui: Ui, base: &str) -> Result<ExitCode> {
         Command::Batch { file, idempotency_key } => batch(cli, ui, &client, file, idempotency_key.as_deref()).map(|()| ExitCode::SUCCESS),
         Command::Domains(command) => domains::run(cli, ui, &client, command),
         Command::Webhooks(command) => webhooks::run(cli, ui, &client, command),
-        Command::Login | Command::Logout => unreachable!(),
+        Command::Login { .. } | Command::Logout => unreachable!(),
     }
 }
 
-fn login(cli: &Cli, ui: Ui, base: &str) -> Result<()> {
+fn login(cli: &Cli, ui: Ui, base: &str, paste: bool) -> Result<()> {
+    // Une clé fournie (--api-key, PULSESEND_API_KEY) ou --paste : l'ancien chemin, utile en CI.
+    if cli.api_key.is_some() || paste {
+        return login_with_key(cli, ui, base);
+    }
+
+    if !std::io::stdin().is_terminal() {
+        bail!("no terminal to log in from: pass --api-key or set PULSESEND_API_KEY");
+    }
+
+    let approved = browser_login::run(ui, base, cli.json)?;
+    let path = save_key(cli, ui, &approved.key)?;
+
+    if cli.json {
+        print_json(&json!({
+            "key": config::mask(&approved.key),
+            "key_name": approved.key_name,
+            "mode": approved.mode,
+            "team": approved.team,
+            "config": path.display().to_string(),
+        }));
+        return Ok(());
+    }
+
+    println!();
+    println!(
+        "{} · {} {}",
+        ui::accent("Logged in"),
+        ui::mode(&approved.mode),
+        ui::label(&format!("· key \"{}\", revoke it anytime in API keys", approved.key_name))
+    );
+    println!("{}", ui::label(&format!("Saved in {} (only you can read it)", path.display())));
+    println!();
+    println!("{} pulsesend send --help", ui::label("Next:"));
+
+    Ok(())
+}
+
+fn login_with_key(cli: &Cli, ui: Ui, base: &str) -> Result<()> {
     let key = match &cli.api_key {
         Some(k) => k.clone(),
         None => {
@@ -247,14 +290,7 @@ fn login(cli: &Cli, ui: Ui, base: &str) -> Result<()> {
     }
     step.done("Key works", &config::mask(&key));
 
-    let step = ui.step("Saving");
-    let mut saved = config::load()?;
-    saved.api_key = Some(key.clone());
-    if cli.base_url.is_some() {
-        saved.base_url = cli.base_url.clone();
-    }
-    let path = config::save(&saved)?;
-    step.done("Saved", "");
+    let path = save_key(cli, ui, &key)?;
 
     if cli.json {
         print_json(&json!({ "key": config::mask(&key), "mode": mode(&key), "config": path.display().to_string() }));
@@ -268,6 +304,19 @@ fn login(cli: &Cli, ui: Ui, base: &str) -> Result<()> {
     println!("{} pulsesend send --help", ui::label("Next:"));
 
     Ok(())
+}
+
+fn save_key(cli: &Cli, ui: Ui, key: &str) -> Result<std::path::PathBuf> {
+    let step = ui.step("Saving");
+    let mut saved = config::load()?;
+    saved.api_key = Some(key.to_string());
+    if cli.base_url.is_some() {
+        saved.base_url = cli.base_url.clone();
+    }
+    let path = config::save(&saved)?;
+    step.done("Saved", "");
+
+    Ok(path)
 }
 
 fn whoami(cli: &Cli, ui: Ui, client: &api::Client, base: &str, key: &str) -> Result<()> {

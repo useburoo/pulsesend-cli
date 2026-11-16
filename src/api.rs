@@ -68,17 +68,37 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .tls_config(tls_config())
+        .try_proxy_from_env(true)
+        .timeout(Duration::from_secs(30))
+        .user_agent(concat!("pulsesend-cli/", env!("CARGO_PKG_VERSION")))
+        .build()
+}
+
+/// POST sur /api/cli/{path}, sans clé (connexion par le navigateur). Rend le statut et le JSON tels
+/// quels : un 400 `{"error": "authorization_pending"}` y est une réponse normale, pas une erreur.
+pub fn cli_post(base: &str, path: &str, body: &Value) -> Result<(u16, Value), Error> {
+    let url = format!("{}/api/cli/{}", base.trim_end_matches('/'), path.trim_start_matches('/'));
+    let result = agent().post(&url).set("Accept", "application/json").send_json(body);
+
+    let resp = match result {
+        Ok(resp) => resp,
+        Err(ureq::Error::Status(_, resp)) => resp,
+        Err(ureq::Error::Transport(t)) => return Err(Error::Transport(t.to_string())),
+    };
+    let status = resp.status();
+    let raw = resp.into_string().map_err(|e| Error::Decode(e.to_string()))?;
+    let json = serde_json::from_str::<Value>(&raw).map_err(|_| Error::Decode(format!("HTTP {status}")))?;
+
+    Ok((status, json))
+}
+
 impl Client {
     pub fn new(base: &str, key: &str) -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .tls_config(tls_config())
-            .try_proxy_from_env(true)
-            .timeout(Duration::from_secs(30))
-            .user_agent(concat!("pulsesend-cli/", env!("CARGO_PKG_VERSION")))
-            .build();
-
         Self {
-            agent,
+            agent: agent(),
             base: base.trim_end_matches('/').to_string(),
             key: key.to_string(),
         }
