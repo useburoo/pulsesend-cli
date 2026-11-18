@@ -1,6 +1,6 @@
 #!/bin/sh
 # Construit le CLI pour toutes les plateformes et, avec --upload, le publie sur R2 (bucket public
-# « pulse-send », servi par https://media.pulse-send.jiordiviera.me/cli/). public/install.sh lit
+# « pulse-send », servi par https://media.send.noburi.space/cli/). public/install.sh lit
 # cli/latest.txt puis cli/<version>/pulsesend-<version>-<cible>.tar.gz (+ .sha256).
 #
 #   cli/scripts/release.sh            construit dans cli/dist/<version>/

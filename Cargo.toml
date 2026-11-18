@@ -5,7 +5,7 @@ edition = "2024"
 description = "Send transactional email with PulseSend from your terminal"
 license = "MIT"
 repository = "https://github.com/useburoo/pulsesend-cli"
-homepage = "https://docs.pulse-send.jiordiviera.me/cli"
+homepage = "https://docs.send.noburi.space/cli"
 
 [dependencies]
 anyhow = "1.0.104"

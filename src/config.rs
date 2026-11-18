@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-pub const DEFAULT_BASE_URL: &str = "https://pulse-send.jiordiviera.me";
+pub const DEFAULT_BASE_URL: &str = "https://send.noburi.space";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {

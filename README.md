@@ -1,9 +1,9 @@
 # pulsesend CLI
 
-Send and inspect transactional email with [PulseSend](https://pulse-send.jiordiviera.me) from your terminal. One static binary, no dependencies.
+Send and inspect transactional email with [PulseSend](https://send.noburi.space) from your terminal. One static binary, no dependencies.
 
 ```bash
-curl -fsSL https://pulse-send.jiordiviera.me/install.sh | sh
+curl -fsSL https://send.noburi.space/install.sh | sh
 ```
 
 Or with Homebrew:
@@ -29,7 +29,7 @@ pulsesend webhooks add --url https://acme.com/hooks/pulsesend
 
 `--json` on any command prints the raw API response. In a terminal the CLI animates its steps; in a pipe or CI it prints plain lines, and `NO_COLOR` turns colors off.
 
-Full documentation: https://docs.pulse-send.jiordiviera.me/cli
+Full documentation: https://docs.send.noburi.space/cli
 
 ## Development
 
@@ -46,7 +46,7 @@ cargo test && cargo clippy --all-targets -- -D warnings
 
 ## Releases
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`: native builds for Linux (x86_64, ARM64, static musl), macOS (Intel, Apple Silicon) and Windows, each smoke-tested, then a GitHub release, the same archives on `media.pulse-send.jiordiviera.me/cli/<version>/` for the install script, and the Homebrew formula in [useburoo/homebrew-tap](https://github.com/useburoo/homebrew-tap). The tag must match `version` in `Cargo.toml`.
+Pushing a `v*` tag runs `.github/workflows/release.yml`: native builds for Linux (x86_64, ARM64, static musl), macOS (Intel, Apple Silicon) and Windows, each smoke-tested, then a GitHub release, the same archives on `media.send.noburi.space/cli/<version>/` for the install script, and the Homebrew formula in [useburoo/homebrew-tap](https://github.com/useburoo/homebrew-tap). The tag must match `version` in `Cargo.toml`.
 
 This repository mirrors the `cli/` folder of the PulseSend monorepo.
 
