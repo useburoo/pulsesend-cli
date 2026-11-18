@@ -1,10 +1,10 @@
 [package]
 name = "pulsesend"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 description = "Send transactional email with PulseSend from your terminal"
 license = "MIT"
-repository = "https://github.com/useburoo/pulsesend-cli"
+repository = "https://github.com/usenoburi/pulsesend-cli"
 homepage = "https://docs.send.noburi.space/cli"
 
 [dependencies]

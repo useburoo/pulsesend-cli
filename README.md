@@ -9,10 +9,10 @@ curl -fsSL https://send.noburi.space/install.sh | sh
 Or with Homebrew:
 
 ```bash
-brew install useburoo/tap/pulsesend
+brew install usenoburi/tap/pulsesend
 ```
 
-Windows: download `pulsesend-<version>-x86_64-pc-windows-msvc.zip` from the [latest release](https://github.com/useburoo/pulsesend-cli/releases/latest) and put `pulsesend.exe` on your `PATH`.
+Windows: download `pulsesend-<version>-x86_64-pc-windows-msvc.zip` from the [latest release](https://github.com/usenoburi/pulsesend-cli/releases/latest) and put `pulsesend.exe` on your `PATH`.
 
 ## Usage
 
@@ -46,7 +46,7 @@ cargo test && cargo clippy --all-targets -- -D warnings
 
 ## Releases
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`: native builds for Linux (x86_64, ARM64, static musl), macOS (Intel, Apple Silicon) and Windows, each smoke-tested, then a GitHub release, the same archives on `media.send.noburi.space/cli/<version>/` for the install script, and the Homebrew formula in [useburoo/homebrew-tap](https://github.com/useburoo/homebrew-tap). The tag must match `version` in `Cargo.toml`.
+Pushing a `v*` tag runs `.github/workflows/release.yml`: native builds for Linux (x86_64, ARM64, static musl), macOS (Intel, Apple Silicon) and Windows, each smoke-tested, then a GitHub release, the same archives on `media.send.noburi.space/cli/<version>/` for the install script, and the Homebrew formula in [usenoburi/homebrew-tap](https://github.com/usenoburi/homebrew-tap). The tag must match `version` in `Cargo.toml`.
 
 This repository mirrors the `cli/` folder of the PulseSend monorepo.
 
